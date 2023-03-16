@@ -3,7 +3,7 @@ import utils from './utils';
 import objectAssignDeep from 'object-assign-deep';
 import path from 'path';
 import yaml from './yaml';
-import Ajv from 'ajv';
+import Ajv, {ValidateFunction} from 'ajv';
 import schemaJson from './settings.schema.json';
 export let schema = schemaJson;
 // @ts-ignore
@@ -31,7 +31,10 @@ const file = process.env.ZIGBEE2MQTT_CONFIG ?? data.joinPath('configuration.yaml
 const ajvSetting = new Ajv({allErrors: true}).addKeyword('requiresRestart').compile(schemaJson);
 const ajvRestartRequired = new Ajv({allErrors: true})
     .addKeyword({keyword: 'requiresRestart', validate: (s: unknown) => !s}).compile(schemaJson);
-
+const ajvRestartRequiredDeviceOptions = new Ajv({allErrors: true})
+    .addKeyword({keyword: 'requiresRestart', validate: (s: unknown) => !s}).compile(schemaJson.definitions.device);
+const ajvRestartRequiredGroupOptions = new Ajv({allErrors: true})
+    .addKeyword({keyword: 'requiresRestart', validate: (s: unknown) => !s}).compile(schemaJson.definitions.group);
 const defaults: RecursivePartial<Settings> = {
     permit_join: false,
     external_converters: [],
@@ -187,6 +190,20 @@ function loadSettingsWithDefaults(): void {
     _settingsWithDefaults.whitelist && _settingsWithDefaults.passlist.push(..._settingsWithDefaults.whitelist);
 }
 
+function parseValueRef(text: string): {filename: string, key: string} | null {
+    const match = /!(.*) (.*)/g.exec(text);
+    if (match) {
+        let filename = match[1];
+        // This is mainly for backward compatibility.
+        if (!filename.endsWith('.yaml') && !filename.endsWith('.yml')) {
+            filename += '.yaml';
+        }
+        return {filename, key: match[2]};
+    } else {
+        return null;
+    }
+}
+
 function write(): void {
     const settings = getInternalSettings();
     const toWrite: KeyValue = objectAssignDeep({}, settings);
@@ -203,9 +220,9 @@ function write(): void {
         ['frontend', 'auth_token'],
     ]) {
         if (actual[path[0]] && actual[path[0]][path[1]]) {
-            const match = /!(.*) (.*)/g.exec(actual[path[0]][path[1]]);
-            if (match) {
-                yaml.updateIfChanged(data.joinPath(`${match[1]}.yaml`), match[2], toWrite[path[0]][path[1]]);
+            const ref = parseValueRef(actual[path[0]][path[1]]);
+            if (ref) {
+                yaml.updateIfChanged(data.joinPath(ref.filename), ref.key, toWrite[path[0]][path[1]]);
                 toWrite[path[0]][path[1]] = actual[path[0]][path[1]];
             }
         }
@@ -213,7 +230,7 @@ function write(): void {
 
     // Write devices/groups to separate file if required.
     const writeDevicesOrGroups = (type: 'devices' | 'groups'): void => {
-        if (typeof actual[type] === 'string' || Array.isArray(actual[type])) {
+        if (typeof actual[type] === 'string' || (Array.isArray(actual[type]) && actual[type].length > 0)) {
             const fileToWrite = Array.isArray(actual[type]) ? actual[type][0] : actual[type];
             const content = objectAssignDeep({}, settings[type]);
 
@@ -309,16 +326,14 @@ export function validate(): string[] {
 
 function read(): Settings {
     const s = yaml.read(file) as Settings;
+    applyEnvironmentVariables(s);
 
     // Read !secret MQTT username and password if set
     // eslint-disable-next-line
     const interpetValue = (value: any): any => {
-        const re = /!(.*) (.*)/g;
-        const match = re.exec(value);
-        if (match) {
-            const file = data.joinPath(`${match[1]}.yaml`);
-            const key = match[2];
-            return yaml.read(file)[key];
+        const ref = parseValueRef(value);
+        if (ref) {
+            return yaml.read(data.joinPath(ref.filename))[ref.key];
         } else {
             return value;
         }
@@ -346,7 +361,7 @@ function read(): Settings {
 
     // Read devices/groups configuration from separate file if specified.
     const readDevicesOrGroups = (type: 'devices' | 'groups'): void => {
-        if (typeof s[type] === 'string' || Array.isArray(s[type])) {
+        if (typeof s[type] === 'string' || (Array.isArray(s[type]) && Array(s[type]).length > 0)) {
             /* eslint-disable-line */ // @ts-ignore
             const files: string[] = Array.isArray(s[type]) ? s[type] : [s[type]];
             s[type] = {};
@@ -416,7 +431,6 @@ function applyEnvironmentVariables(settings: Partial<Settings>): void {
 function getInternalSettings(): Partial<Settings> {
     if (!_settings) {
         _settings = read();
-        applyEnvironmentVariables(_settings);
     }
 
     return _settings;
@@ -656,21 +670,27 @@ export function removeGroup(IDorName: string | number): void {
     write();
 }
 
-export function changeEntityOptions(IDorName: string, newOptions: KeyValue): void {
+export function changeEntityOptions(IDorName: string, newOptions: KeyValue): boolean {
     const settings = getInternalSettings();
     delete newOptions.friendly_name;
     delete newOptions.devices;
+    let validator: ValidateFunction;
     if (getDevice(IDorName)) {
         objectAssignDeep(settings.devices[getDevice(IDorName).ID], newOptions);
         utils.removeNullPropertiesFromObject(settings.devices[getDevice(IDorName).ID]);
+        validator = ajvRestartRequiredDeviceOptions;
     } else if (getGroup(IDorName)) {
         objectAssignDeep(settings.groups[getGroup(IDorName).ID], newOptions);
         utils.removeNullPropertiesFromObject(settings.groups[getGroup(IDorName).ID]);
+        validator = ajvRestartRequiredGroupOptions;
     } else {
         throw new Error(`Device or group '${IDorName}' does not exist`);
     }
 
     write();
+    validator(newOptions);
+    const restartRequired = validator.errors && !!validator.errors.find((e) => e.keyword === 'requiresRestart');
+    return restartRequired;
 }
 
 export function changeFriendlyName(IDorName: string, newName: string): void {

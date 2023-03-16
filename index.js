@@ -1,5 +1,3 @@
-require('core-js/features/object/from-entries');
-require('core-js/features/array/flat');
 const semver = require('semver');
 const engines = require('./package.json').engines;
 const fs = require('fs');
@@ -120,10 +118,16 @@ async function handleQuit() {
     }
 }
 
-if (process.argv.length === 3 && process.argv[2] === 'writehash') {
-    writeHash();
+if (require.main === module || require.main.filename.endsWith(path.sep + 'cli.js')) {
+    if (process.argv.length === 3 && process.argv[2] === 'writehash') {
+        writeHash();
+    } else {
+        process.on('SIGINT', handleQuit);
+        process.on('SIGTERM', handleQuit);
+        start();
+    }
 } else {
     process.on('SIGINT', handleQuit);
     process.on('SIGTERM', handleQuit);
-    start();
+    module.exports = {start};
 }

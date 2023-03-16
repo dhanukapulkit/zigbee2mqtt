@@ -39,7 +39,7 @@ const AllExtensions = [
 type ExtensionArgs = [Zigbee, MQTT, State, PublishEntityState, EventBus,
     (enable: boolean, name: string) => Promise<void>, () => void, (extension: Extension) => Promise<void>];
 
-class Controller {
+export class Controller {
     private eventBus: EventBus;
     private zigbee: Zigbee;
     private state: State;
@@ -49,7 +49,7 @@ class Controller {
     private extensions: Extension[];
     private extensionArgs: ExtensionArgs;
 
-    constructor(restartCallback: () => void, exitCallback: (code: number) => void) {
+    constructor(restartCallback: () => void, exitCallback: (code: number, restart: boolean) => void) {
         logger.init();
         this.eventBus = new EventBus( /* istanbul ignore next */ (error) => {
             logger.error(`Error: ${error.message}`);
@@ -57,7 +57,7 @@ class Controller {
         });
         this.zigbee = new Zigbee(this.eventBus);
         this.mqtt = new MQTT(this.eventBus);
-        this.state = new State(this.eventBus);
+        this.state = new State(this.eventBus, this.zigbee);
         this.restartCallback = restartCallback;
         this.exitCallback = exitCallback;
 
@@ -144,8 +144,7 @@ class Controller {
         try {
             await this.mqtt.connect();
         } catch (error) {
-            logger.error(`MQTT failed to connect: ${error.message}`);
-            logger.error('Exiting...');
+            logger.error(`MQTT failed to connect, exiting...`);
             await this.zigbee.stop();
             await this.exit(1);
         }
@@ -164,6 +163,8 @@ class Controller {
 
         this.eventBus.onLastSeenChanged(this,
             (data) => utils.publishLastSeen(data, settings.get(), false, this.publishEntityState));
+
+        logger.info(`Zigbee2MQTT started!`);
     }
 
     @bind async enableDisableExtension(enable: boolean, name: string): Promise<void> {
@@ -242,11 +243,14 @@ class Controller {
             message.device = {
                 friendlyName: entity.name, model: entity.definition ? entity.definition.model : 'unknown',
                 ieeeAddr: entity.ieeeAddr, networkAddress: entity.zh.networkAddress, type: entity.zh.type,
-                manufacturerID: entity.zh.manufacturerID, manufacturerName: entity.zh.manufacturerName,
+                manufacturerID: entity.zh.manufacturerID,
                 powerSource: entity.zh.powerSource, applicationVersion: entity.zh.applicationVersion,
                 stackVersion: entity.zh.stackVersion, zclVersion: entity.zh.zclVersion,
                 hardwareVersion: entity.zh.hardwareVersion, dateCode: entity.zh.dateCode,
                 softwareBuildID: entity.zh.softwareBuildID,
+                // Manufacturer name can contain \u0000, remove this.
+                // https://github.com/home-assistant/core/issues/85691
+                manufacturerName: entity.zh.manufacturerName?.split('\u0000')[0],
             };
         }
 

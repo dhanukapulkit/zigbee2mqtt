@@ -4,6 +4,8 @@ import data from './data';
 import vm from 'vm';
 import fs from 'fs';
 import path from 'path';
+import {detailedDiff} from 'deep-object-diff';
+import objectAssignDeep from 'object-assign-deep';
 
 // construct a local ISO8601 string (instead of UTC-based)
 // Example:
@@ -77,7 +79,7 @@ async function getZigbee2MQTTVersion(includeCommitHash=true): Promise<{commitHas
 }
 
 async function getDependencyVersion(depend: string): Promise<{version: string}> {
-    const packageJSON = await import(path.join(__dirname, '..', '..', 'node_modules', depend, 'package.json'));
+    const packageJSON = await import(path.join(require.resolve(depend), '..', '..', 'package.json'));
     const version = packageJSON.version;
     return {version};
 }
@@ -132,8 +134,8 @@ function parseJSON(value: string, fallback: string): KeyValue | string {
     }
 }
 
-function loadModuleFromText(moduleCode: string): unknown {
-    const moduleFakePath = path.join(__dirname, 'externally-loaded.js');
+function loadModuleFromText(moduleCode: string, name?: string): unknown {
+    const moduleFakePath = path.join(__dirname, '..', '..', 'data', 'extension', name || 'externally-loaded.js');
     const sandbox = {
         require: require,
         module: {},
@@ -295,6 +297,8 @@ function isAvailabilityEnabledForEntity(entity: Device | Group, settings: Settin
     const enabledGlobal = settings.advanced.availability_timeout || settings.availability;
     if (!enabledGlobal) return false;
 
+    if (entity.isDevice() && entity.options.disabled) return false;
+
     const passlist = settings.advanced.availability_passlist.concat(settings.advanced.availability_whitelist);
     if (passlist.length > 0) {
         return passlist.includes(entity.name) || passlist.includes(entity.ieeeAddr);
@@ -312,6 +316,14 @@ function parseEntityID(ID: string): {ID: string, endpoint: string} {
 
 function isEndpoint(obj: unknown): obj is zh.Endpoint {
     return obj.constructor.name.toLowerCase() === 'endpoint';
+}
+
+function flatten<Type>(arr: Type[][]): Type[] {
+    return [].concat(...arr);
+}
+
+function arrayUnique<Type>(arr: Type[]): Type[] {
+    return [...new Set(arr)];
 }
 
 function isZHGroup(obj: unknown): obj is zh.Group {
@@ -351,11 +363,48 @@ function filterProperties(filter: string[], data: KeyValue): void {
     }
 }
 
+function clone(obj: KeyValue): KeyValue {
+    return JSON.parse(JSON.stringify(obj));
+}
+
+function computeSettingsToChange(current: KeyValue, new_: KeyValue): KeyValue {
+    const diff: KeyValue = detailedDiff(current, new_);
+
+    // Remove any settings that are in the deleted.diff but not in the passed options
+    const cleanupDeleted = (options: KeyValue, deleted: KeyValue): void => {
+        for (const key of Object.keys(deleted)) {
+            if (!(key in options)) {
+                delete deleted[key];
+            } else if (!Array.isArray(options[key])) {
+                cleanupDeleted(options[key], deleted[key]);
+            }
+        }
+    };
+    cleanupDeleted(new_, diff.deleted);
+
+    // objectAssignDeep requires object prototype which is missing from detailedDiff, therefore clone
+    const newSettings = objectAssignDeep({}, clone(diff.added), clone(diff.updated), clone(diff.deleted));
+
+    // deep-object-diff converts arrays to objects, set original array back here
+    const convertBackArray = (before: KeyValue, after: KeyValue): void => {
+        for (const [key, afterValue] of Object.entries(after)) {
+            const beforeValue = before[key];
+            if (Array.isArray(beforeValue)) {
+                after[key] = beforeValue;
+            } else if (afterValue && typeof beforeValue === 'object') {
+                convertBackArray(beforeValue, afterValue);
+            }
+        }
+    };
+    convertBackArray(new_, newSettings);
+    return newSettings;
+}
+
 export default {
     endpointNames, capitalize, getZigbee2MQTTVersion, getDependencyVersion, formatDate, objectHasProperties,
     equalsPartial, getObjectProperty, getResponse, parseJSON, loadModuleFromText, loadModuleFromFile,
     getExternalConvertersDefinitions, removeNullPropertiesFromObject, toNetworkAddressHex, toSnakeCase,
     parseEntityID, isEndpoint, isZHGroup, hours, minutes, seconds, validateFriendlyName, sleep,
     sanitizeImageParameter, isAvailabilityEnabledForEntity, publishLastSeen, availabilityPayload,
-    getAllFiles, filterProperties,
+    getAllFiles, filterProperties, flatten, arrayUnique, clone, computeSettingsToChange,
 };

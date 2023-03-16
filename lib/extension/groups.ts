@@ -142,6 +142,7 @@ export default class Groups extends Extension {
                 const groupsToPublish: Set<Group> = new Set();
                 for (const member of entity.zh.members) {
                     const device = this.zigbee.resolveEntity(member.getDevice()) as Device;
+                    if (device.options.disabled) continue;
                     const exposes = device.exposes();
                     const memberPayload: KeyValue = {};
                     Object.keys(payload).forEach((key) => {
@@ -292,6 +293,7 @@ export default class Groups extends Extension {
             groupKey, deviceKey, skipDisableReporting, resolvedEntityEndpoint,
         } = parsed;
         const message = utils.parseJSON(data.message, data.message);
+        let changedGroups: Group[] = [];
 
         const responseData: KeyValue = {device: deviceKey};
         if (groupKey) {
@@ -320,6 +322,7 @@ export default class Groups extends Extension {
                     logger.info(`Adding '${resolvedEntityDevice.name}' to '${resolvedEntityGroup.name}'`);
                     await resolvedEntityEndpoint.addToGroup(resolvedEntityGroup.zh);
                     settings.addDeviceToGroup(resolvedEntityGroup.ID.toString(), keys);
+                    changedGroups.push(resolvedEntityGroup);
 
                     /* istanbul ignore else */
                     if (settings.get().advanced.legacy_api) {
@@ -333,6 +336,7 @@ export default class Groups extends Extension {
                     logger.info(`Removing '${resolvedEntityDevice.name}' from '${resolvedEntityGroup.name}'`);
                     await resolvedEntityEndpoint.removeFromGroup(resolvedEntityGroup.zh);
                     settings.removeDeviceFromGroup(resolvedEntityGroup.ID.toString(), keys);
+                    changedGroups.push(resolvedEntityGroup);
 
                     /* istanbul ignore else */
                     if (settings.get().advanced.legacy_api) {
@@ -344,6 +348,7 @@ export default class Groups extends Extension {
                     }
                 } else { // remove_all
                     logger.info(`Removing '${resolvedEntityDevice.name}' from all groups`);
+                    changedGroups = this.zigbee.groups().filter((g) => g.zh.members.includes(resolvedEntityEndpoint));
                     await resolvedEntityEndpoint.removeFromAllGroups();
                     for (const settingsGroup of settings.getGroups()) {
                         settings.removeDeviceFromGroup(settingsGroup.ID.toString(), keys);
@@ -372,8 +377,10 @@ export default class Groups extends Extension {
         if (error) {
             logger.error(error);
         } else {
-            this.eventBus.emitGroupMembersChanged({
-                group: resolvedEntityGroup, action: type, endpoint: resolvedEntityEndpoint, skipDisableReporting});
+            for (const group of changedGroups) {
+                this.eventBus.emitGroupMembersChanged({
+                    group, action: type, endpoint: resolvedEntityEndpoint, skipDisableReporting});
+            }
         }
     }
 }

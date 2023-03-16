@@ -1,7 +1,7 @@
-FROM node:16-alpine3.15 as base
+FROM alpine:3.17.2 as base
 
 WORKDIR /app
-RUN apk add --no-cache tzdata eudev tini
+RUN apk add --no-cache tzdata eudev tini nodejs
 
 # Dependencies and build
 FROM base as dependencies_and_build
@@ -9,8 +9,10 @@ FROM base as dependencies_and_build
 COPY package*.json tsconfig.json index.js ./
 COPY lib ./lib
 
-RUN apk add --no-cache --virtual .buildtools make gcc g++ python3 linux-headers git && \
+RUN apk add --no-cache --virtual .buildtools make gcc g++ python3 linux-headers git npm && \
     npm ci --production --no-audit --no-optional --no-update-notifier && \
+    # Serialport needs to be rebuild for Alpine https://serialport.io/docs/9.x.x/guide-installation#alpine-linux
+    npm rebuild --build-from-source && \
     apk del .buildtools
 
 # Release
@@ -27,6 +29,8 @@ RUN mkdir /app/data
 
 ARG COMMIT
 RUN echo "$COMMIT" > dist/.hash
+
+ENV NODE_ENV production
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD [ "/sbin/tini", "--", "node", "index.js"]

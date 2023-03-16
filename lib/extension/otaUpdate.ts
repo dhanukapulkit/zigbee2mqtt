@@ -24,8 +24,13 @@ function isValidUrl(url: string): boolean {
 
 type UpdateState = 'updating' | 'idle' | 'available';
 interface UpdatePayload {
+    update_available?: boolean
     // eslint-disable-next-line camelcase
-    update: {progress?: number, remaining?: number, state: UpdateState}, update_available?: boolean}
+    update: {
+        progress?: number, remaining?: number, state: UpdateState,
+        installed_version: number | null, latest_version: number | null
+    }
+}
 
 const legacyTopicRegex = new RegExp(`^${settings.get().mqtt.base_topic}/bridge/ota_update/.+$`);
 const topicRegex =
@@ -86,18 +91,18 @@ export default class OTAUpdate extends Extension {
             if (!check) return;
 
             this.lastChecked[data.device.ieeeAddr] = Date.now();
-            let available = false;
+            let availableResult: zhc.OtaUpdateAvailableResult = null;
             try {
-                available = await data.device.definition.ota.isUpdateAvailable(data.device.zh, logger, data.data);
+                availableResult = await data.device.definition.ota.isUpdateAvailable(data.device.zh, logger, data.data);
             } catch (e) {
                 supportsOTA = false;
                 logger.debug(`Failed to check if update available for '${data.device.name}' (${e.message})`);
             }
 
-            const payload = this.getEntityPublishPayload(available ? 'available' : 'idle');
+            const payload = this.getEntityPublishPayload(data.device, availableResult ?? 'idle');
             this.publishEntityState(data.device, payload);
 
-            if (available) {
+            if (availableResult?.available) {
                 const message = `Update available for '${data.device.name}'`;
                 logger.info(message);
 
@@ -112,14 +117,10 @@ export default class OTAUpdate extends Extension {
             }
         }
 
-        // Respond to the OTA request:
-        // - In case we don't support OTA: respond with NO_IMAGE_AVAILABLE (0x98) (so the client stops requesting OTAs)
-        // - In case we do support OTA: respond with ABORT (0x95) as we don't want to update now.
-        const endpoint = data.device.zh.endpoints.find((e) => e.supportsOutputCluster('genOta'));
-        if (endpoint) {
-            // Some devices send OTA requests without defining OTA cluster as input cluster.
-            await endpoint.commandResponse('genOta', 'queryNextImageResponse', {status: supportsOTA ? 0x95 : 0x98});
-        }
+        // Respond to the OTA request: respond with NO_IMAGE_AVAILABLE (0x98) (so the client stops requesting OTAs)
+        const endpoint = data.device.zh.endpoints.find((e) => e.supportsOutputCluster('genOta')) || data.endpoint;
+        await endpoint.commandResponse('genOta', 'queryNextImageResponse', {status: 0x98});
+        logger.debug(`Responded to OTA request of '${data.device.name}' with 'NO_IMAGE_AVAILABLE'`);
     }
 
     private async readSoftwareBuildIDAndDateCode(device: Device, sendWhen: 'active' | 'immediate'):
@@ -133,14 +134,22 @@ export default class OTAUpdate extends Extension {
         }
     }
 
-    private getEntityPublishPayload(state: UpdateState, progress: number=null, remaining: number=null): UpdatePayload {
-        const payload: UpdatePayload = {update: {state}};
+    private getEntityPublishPayload(device: Device, state: zhc.OtaUpdateAvailableResult | UpdateState,
+        progress: number=null, remaining: number=null): UpdatePayload {
+        const deviceUpdateState = this.state.get(device).update;
+        const payload: UpdatePayload = {update: {
+            state: typeof state === 'string' ? state : (state.available ? 'available' : 'idle'),
+            installed_version: typeof state === 'string' ?
+                deviceUpdateState?.installed_version : state.currentFileVersion,
+            latest_version: typeof state === 'string' ?
+                deviceUpdateState?.latest_version : state.otaFileVersion,
+        }};
         if (progress !== null) payload.update.progress = progress;
         if (remaining !== null) payload.update.remaining = Math.round(remaining);
 
         /* istanbul ignore else */
         if (this.legacyApi) {
-            payload.update_available = state === 'available';
+            payload.update_available = typeof state === 'string' ? state === 'available' : state.available;
         }
 
         return payload;
@@ -191,23 +200,24 @@ export default class OTAUpdate extends Extension {
                 }
 
                 try {
-                    const available = await device.definition.ota.isUpdateAvailable(device.zh, logger);
-                    const msg = `${available ? 'Update' : 'No update'} available for '${device.name}'`;
+                    const availableResult = await device.definition.ota.isUpdateAvailable(device.zh, logger);
+                    const msg = `${availableResult.available ? 'Update' : 'No update'} available for '${device.name}'`;
                     logger.info(msg);
 
                     /* istanbul ignore else */
                     if (settings.get().advanced.legacy_api) {
-                        const meta = {status: available ? 'available' : 'not_available', device: device.name};
+                        const meta = {
+                            status: availableResult.available ? 'available' : 'not_available', device: device.name};
                         this.mqtt.publish(
                             'bridge/log',
                             stringify({type: `ota_update`, message: msg, meta}),
                         );
                     }
 
-                    const payload = this.getEntityPublishPayload(available ? 'available' : 'idle');
+                    const payload = this.getEntityPublishPayload(device, availableResult);
                     this.publishEntityState(device, payload);
                     this.lastChecked[device.ieeeAddr] = Date.now();
-                    responseData.updateAvailable = available;
+                    responseData.updateAvailable = availableResult.available;
                 } catch (e) {
                     error = `Failed to check if update available for '${device.name}' (${e.message})`;
                     errorStack = e.stack;
@@ -243,7 +253,7 @@ export default class OTAUpdate extends Extension {
 
                         logger.info(msg);
 
-                        const payload = this.getEntityPublishPayload('updating', progress, remaining);
+                        const payload = this.getEntityPublishPayload(device, 'updating', progress, remaining);
                         this.publishEntityState(device, payload);
 
                         /* istanbul ignore else */
@@ -254,11 +264,12 @@ export default class OTAUpdate extends Extension {
                     };
 
                     const from_ = await this.readSoftwareBuildIDAndDateCode(device, 'immediate');
-                    await device.definition.ota.updateToLatest(device.zh, logger, onProgress);
+                    const fileVersion = await device.definition.ota.updateToLatest(device.zh, logger, onProgress);
                     logger.info(`Finished update of '${device.name}'`);
                     this.eventBus.emitReconfigure({device});
                     this.removeProgressAndRemainingFromState(device);
-                    const payload = this.getEntityPublishPayload('idle');
+                    const payload = this.getEntityPublishPayload(device,
+                        {available: false, currentFileVersion: fileVersion, otaFileVersion: fileVersion});
                     this.publishEntityState(device, payload);
                     const to = await this.readSoftwareBuildIDAndDateCode(device, 'active');
                     const [fromS, toS] = [stringify(from_), stringify(to)];
@@ -278,7 +289,7 @@ export default class OTAUpdate extends Extension {
                     errorStack = e.stack;
 
                     this.removeProgressAndRemainingFromState(device);
-                    const payload = this.getEntityPublishPayload('available');
+                    const payload = this.getEntityPublishPayload(device, 'available');
                     this.publishEntityState(device, payload);
 
                     /* istanbul ignore else */

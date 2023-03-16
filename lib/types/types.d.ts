@@ -100,9 +100,11 @@ declare global {
 
         interface DefinitionExpose {
             type: string, name?: string, features?: DefinitionExposeFeature[],
-            endpoint?: string, values?: string[], value_off?: string, value_on?: string,
+            endpoint?: string, values?: string[], value_off?: string, value_on?: string, value_step?: number,
             access: number, property: string, unit?: string,
             value_min?: number, value_max?: number}
+
+        interface OtaUpdateAvailableResult {available: boolean, currentFileVersion: number, otaFileVersion: number}
 
         interface Definition {
             model: string,
@@ -120,9 +122,10 @@ declare global {
             onEvent?: (type: string, data: KeyValue, device: zh.Device,
                 settings: KeyValue, state: KeyValue) => Promise<void>;
             ota?: {
-                isUpdateAvailable: (device: zh.Device, logger: Logger, data?: KeyValue) => Promise<boolean>;
+                isUpdateAvailable: (device: zh.Device, logger: Logger, data?: KeyValue)
+                    => Promise<OtaUpdateAvailableResult>;
                 updateToLatest: (device: zh.Device, logger: Logger,
-                    onProgress: (progress: number, remaining: number) => void) => Promise<void>;
+                    onProgress: (progress: number, remaining: number) => void) => Promise<number>;
             }
         }
 
@@ -233,6 +236,8 @@ declare global {
             host?: string,
             port?: number,
             url?: string,
+            ssl_cert?: string,
+            ssl_key?: string,
         },
         devices?: {[s: string]: DeviceOptions},
         groups?: {[s: string]: GroupOptions},
@@ -274,6 +279,7 @@ declare global {
 
     interface DeviceOptions {
         ID?: string,
+        disabled?: boolean,
         retention?: number,
         availability?: boolean | {timeout: number},
         optimistic?: boolean,

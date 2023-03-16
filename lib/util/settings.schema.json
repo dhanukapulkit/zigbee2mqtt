@@ -388,6 +388,18 @@
               "title": "URL",
               "description": "URL on which the frontend can be reached, currently only used for the Home Assistant device configuration page",
               "requiresRestart": true
+            },
+            "ssl_cert" :  {
+              "type": ["string", "null"],
+              "title": "Certificate file path",
+              "description": "SSL Certificate file path for exposing HTTPS. The sibling property 'ssl_key' must be set for HTTPS to be activated.",
+              "requiresRestart": true
+            },
+            "ssl_key" :  {
+              "type": ["string", "null"],
+              "title": "key file path",
+              "description": "SSL key file path for exposing HTTPS. The sibling property 'ssl_cert' must be set for HTTPS to be activated.",
+              "requiresRestart": true
             }
           }
         }
@@ -499,13 +511,13 @@
               "type": "number",
               "title": "Port",
               "description": "The port on the host that syslog is running on, defaults to syslogd's default port.",
-              "default": 123
+              "default": 514
             },
             "protocol": {
               "type": "string",
               "title": "Protocol",
               "description": "The network protocol to log over (e.g. tcp4, udp4, tls4, unix, unix-connect, etc).",
-              "default": "tcp4",
+              "default": "udp4",
               "examples": [
                 "udp4",
                 "tls4",
@@ -782,6 +794,12 @@
           "title": "Retain",
           "description": "Retain MQTT messages of this device"
         },
+        "disabled": {
+          "type": "boolean",
+          "title": "Disabled",
+          "description": "Disables the device (excludes device from network scans, availability and group state updates)",
+          "requiresRestart": true
+        },
         "retention": {
           "type": "number",
           "title": "Retention",
@@ -842,7 +860,7 @@
         "icon": {
           "type": "string",
           "title": "Icon",
-          "description": "The user-defined device icon for the frontend. It can be a link to an image (not a path to a file) or base64 encoded data URL like: image/svg+xml;base64,PHN2ZyB3aW....R0aD"
+          "description": "The user-defined device icon for the frontend. It can be a full URL link to an image (e.g. https://SOME.SITE/MODEL123.jpg) (you cannot use a path to a local file) or base64 encoded data URL (e.g. image/svg+xml;base64,PHN2ZyB3aW....R0aD)"
         },
         "homeassistant": {
           "type": ["object", "null"],

@@ -68,7 +68,8 @@ const reportClusters: {[s: string]:
 type PollOnMessage = {
     cluster: {[s: string]: {type: string, data: KeyValue}[]}
     read: {cluster: string, attributes: string[], attributesForEndpoint?: (endpoint: zh.Endpoint) => Promise<string[]>}
-    manufacturerIDs: number[]
+    manufacturerIDs: number[],
+    manufacturerNames: string [],
 }[];
 
 const pollOnMessage: PollOnMessage = [
@@ -101,6 +102,11 @@ const pollOnMessage: PollOnMessage = [
             zigbeeHersdman.Zcl.ManufacturerCode.GLEDOPTO_CO_LTD,
             zigbeeHersdman.Zcl.ManufacturerCode.MUELLER_LICHT_INT,
             zigbeeHersdman.Zcl.ManufacturerCode.TELINK,
+            zigbeeHersdman.Zcl.ManufacturerCode.BUSCH_JAEGER,
+        ],
+        manufacturerNames: [
+            'GLEDOPTO',
+            'Trust International B.V.\u0000',
         ],
     },
     {
@@ -132,6 +138,11 @@ const pollOnMessage: PollOnMessage = [
             zigbeeHersdman.Zcl.ManufacturerCode.GLEDOPTO_CO_LTD,
             zigbeeHersdman.Zcl.ManufacturerCode.MUELLER_LICHT_INT,
             zigbeeHersdman.Zcl.ManufacturerCode.TELINK,
+            zigbeeHersdman.Zcl.ManufacturerCode.BUSCH_JAEGER,
+        ],
+        manufacturerNames: [
+            'GLEDOPTO',
+            'Trust International B.V.\u0000',
         ],
     },
     {
@@ -159,6 +170,11 @@ const pollOnMessage: PollOnMessage = [
             zigbeeHersdman.Zcl.ManufacturerCode.GLEDOPTO_CO_LTD,
             zigbeeHersdman.Zcl.ManufacturerCode.MUELLER_LICHT_INT,
             zigbeeHersdman.Zcl.ManufacturerCode.TELINK,
+            // Note: ManufacturerCode.BUSCH_JAEGER is left out intentionally here as their devices don't support colors
+        ],
+        manufacturerNames: [
+            'GLEDOPTO',
+            'Trust International B.V.\u0000',
         ],
     },
 ];
@@ -456,7 +472,8 @@ export default class Bind extends Extension {
 
             for (const endpoint of toPoll) {
                 for (const poll of polls) {
-                    if (!poll.manufacturerIDs.includes(endpoint.getDevice().manufacturerID) ||
+                    if ((!poll.manufacturerIDs.includes(endpoint.getDevice().manufacturerID) &&
+                        !poll.manufacturerNames.includes(endpoint.getDevice().manufacturerName)) ||
                         !endpoint.supportsInputCluster(poll.read.cluster)) {
                         continue;
                     }

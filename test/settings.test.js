@@ -67,21 +67,41 @@ describe('Settings', () => {
     it('Should apply environment variables', () => {
         process.env['ZIGBEE2MQTT_CONFIG_SERIAL_DISABLE_LED'] = 'true';
         process.env['ZIGBEE2MQTT_CONFIG_ADVANCED_SOFT_RESET_TIMEOUT'] = 1;
-        process.env['ZIGBEE2MQTT_CONFIG_ADVANCED_OUTPUT'] = 'csvtest';
+        process.env['ZIGBEE2MQTT_CONFIG_ADVANCED_OUTPUT'] = 'attribute_and_json';
+        process.env['ZIGBEE2MQTT_CONFIG_ADVANCED_LOG_OUTPUT'] = '["console"]';
         process.env['ZIGBEE2MQTT_CONFIG_MAP_OPTIONS_GRAPHVIZ_COLORS_FILL'] = '{"enddevice": "#ff0000", "coordinator": "#00ff00", "router": "#0000ff"}';
         process.env['ZIGBEE2MQTT_CONFIG_MQTT_BASE_TOPIC'] = 'testtopic';
+        process.env['ZIGBEE2MQTT_CONFIG_MQTT_SERVER'] = 'testserver';
         process.env['ZIGBEE2MQTT_CONFIG_ADVANCED_NETWORK_KEY'] = 'GENERATE';
+        process.env['ZIGBEE2MQTT_CONFIG_DEVICES'] = 'devices.yaml';
+
+        const contentDevices = {
+            '0x00158d00018255df': {
+                friendly_name: '0x00158d00018255df',
+                retain: false,
+            },
+        };
 
         write(configurationFile, {});
+        write(devicesFile, contentDevices);
+        expect(settings.validate()).toStrictEqual([]);
+
         const s = settings.get();
         const expected = objectAssignDeep.noMutate({}, settings.testing.defaults);
-        expected.devices = {};
+        expected.devices = {
+            '0x00158d00018255df': {
+                friendly_name: '0x00158d00018255df',
+                retain: false,
+            },
+        };
         expected.groups = {};
         expected.serial.disable_led = true;
         expected.advanced.soft_reset_timeout = 1;
-        expected.advanced.output = 'csvtest';
+        expected.advanced.log_output = ["console"];
+        expected.advanced.output = 'attribute_and_json';
         expected.map_options.graphviz.colors.fill = {enddevice: '#ff0000', coordinator: '#00ff00', router: '#0000ff'};
         expected.mqtt.base_topic = 'testtopic';
+        expected.mqtt.server = 'testserver';
         expected.advanced.network_key = 'GENERATE';
 
         expect(s).toStrictEqual(expected);
@@ -89,6 +109,22 @@ describe('Settings', () => {
 
     it('Should add devices', () => {
         write(configurationFile, {});
+        settings.addDevice('0x12345678');
+
+        const actual = read(configurationFile);
+        const expected = {
+            devices: {
+                '0x12345678': {
+                    friendly_name: '0x12345678',
+                },
+            },
+        };
+
+        expect(actual).toStrictEqual(expected);
+    });
+
+    it('Should add devices even when devices exist empty', () => {
+        write(configurationFile, {devices: []});
         settings.addDevice('0x12345678');
 
         const actual = read(configurationFile);
@@ -179,7 +215,7 @@ describe('Settings', () => {
             mqtt: {
                 server: '!secret server',
                 user: '!secret username',
-                password: '!secret password',
+                password: '!secret.yaml password',
             },
             advanced: {
                 network_key: '!secret network_key',
@@ -884,7 +920,7 @@ describe('Settings', () => {
 
     it('Frontend config', () => {
         write(configurationFile, {...minimalConfig,
-            frontend: true, 
+            frontend: true,
         });
 
         settings.reRead();
@@ -893,7 +929,7 @@ describe('Settings', () => {
 
     it('Baudrate config', () => {
         write(configurationFile, {...minimalConfig,
-            advanced: {baudrate: 20}, 
+            advanced: {baudrate: 20},
         });
 
         settings.reRead();
@@ -902,7 +938,7 @@ describe('Settings', () => {
 
     it('ikea_ota_use_test_url config', () => {
         write(configurationFile, {...minimalConfig,
-            advanced: {ikea_ota_use_test_url: true}, 
+            advanced: {ikea_ota_use_test_url: true},
         });
 
         settings.reRead();
@@ -911,7 +947,7 @@ describe('Settings', () => {
 
     it('transmit_power config', () => {
         write(configurationFile, {...minimalConfig,
-            experimental: {transmit_power: 1337}, 
+            experimental: {transmit_power: 1337},
         });
 
         settings.reRead();
@@ -920,7 +956,7 @@ describe('Settings', () => {
 
     it('output config', () => {
         write(configurationFile, {...minimalConfig,
-            experimental: {output: 'json'}, 
+            experimental: {output: 'json'},
         });
 
         settings.reRead();
@@ -929,7 +965,7 @@ describe('Settings', () => {
 
     it('Baudrartsctste config', () => {
         write(configurationFile, {...minimalConfig,
-            advanced: {rtscts: true}, 
+            advanced: {rtscts: true},
         });
 
         settings.reRead();
@@ -938,7 +974,7 @@ describe('Settings', () => {
 
     it('Deprecated: Home Assistant config', () => {
         write(configurationFile, {...minimalConfig,
-            homeassistant: {discovery_topic: 'new'}, 
+            homeassistant: {discovery_topic: 'new'},
             advanced: {homeassistant_discovery_topic: 'old', homeassistant_status_topic: 'olds'},
         });
 

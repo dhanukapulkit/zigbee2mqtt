@@ -6,7 +6,6 @@ import Transport from 'winston-transport';
 import bind from 'bind-decorator';
 import stringify from 'json-stable-stringify-without-jsonify';
 import objectAssignDeep from 'object-assign-deep';
-import {detailedDiff} from 'deep-object-diff';
 import Extension from './extension';
 import Device from '../model/device';
 import Group from '../model/group';
@@ -44,6 +43,7 @@ export default class Bridge extends Extension {
             'backup': this.backup,
             'touchlink/factory_reset': this.touchlinkFactoryReset,
             'touchlink/identify': this.touchlinkIdentify,
+            'install_code/add': this.installCodeAdd,
             'touchlink/scan': this.touchlinkScan,
             'health_check': this.healthCheck,
             'options': this.bridgeOptions,
@@ -147,35 +147,7 @@ export default class Bridge extends Extension {
             throw new Error(`Invalid payload`);
         }
 
-        const diff: KeyValue = detailedDiff(settings.get(), message.options);
-
-        // Remove any settings that are in the deleted.diff but not in the passed options
-        const cleanupDeleted = (options: KeyValue, deleted: KeyValue): void => {
-            for (const key of Object.keys(deleted)) {
-                if (!(key in options)) {
-                    delete deleted[key];
-                } else if (!Array.isArray(options[key])) {
-                    cleanupDeleted(options[key], deleted[key]);
-                }
-            }
-        };
-        cleanupDeleted(message.options, diff.deleted);
-
-        const newSettings = objectAssignDeep({}, diff.added, diff.updated, diff.deleted);
-
-        // deep-object-diff converts arrays to objects, set original array back here
-        const convertBackArray = (before: KeyValue, after: KeyValue): void => {
-            for (const [key, afterValue] of Object.entries(after)) {
-                const beforeValue = before[key];
-                if (Array.isArray(beforeValue)) {
-                    after[key] = beforeValue;
-                } else if (afterValue && typeof beforeValue === 'object') {
-                    convertBackArray(beforeValue, afterValue);
-                }
-            }
-        };
-        convertBackArray(message.options, newSettings);
-
+        const newSettings = utils.computeSettingsToChange(settings.get(), message.options);
         const restartRequired = settings.apply(newSettings);
         if (restartRequired) this.restartRequired = true;
 
@@ -246,6 +218,17 @@ export default class Bridge extends Extension {
         files.forEach((f) => zip.file(f[1], fs.readFileSync(f[0])));
         const base64Zip = await zip.generateAsync({type: 'base64'});
         return utils.getResponse(message, {zip: base64Zip}, null);
+    }
+
+    @bind async installCodeAdd(message: KeyValue | string): Promise<MQTTResponse> {
+        if (typeof message === 'object' && !message.hasOwnProperty('value')) {
+            throw new Error('Invalid payload');
+        }
+
+        const value = typeof message === 'object' ? message.value : message;
+        await this.zigbee.addInstallCode(value);
+        logger.info('Successfully added new install code');
+        return utils.getResponse(message, {value}, null);
     }
 
     @bind async permitJoin(message: KeyValue | string): Promise<MQTTResponse> {
@@ -407,15 +390,23 @@ export default class Bridge extends Extension {
 
         const ID = message.id;
         const entity = this.getEntity(entityType, ID);
+        const currentOptions = entityType === 'device' ? settings.get().devices[entity.ID] :
+            settings.get().groups[entity.ID];
+        const options = utils.computeSettingsToChange(currentOptions, message.options);
         const oldOptions = objectAssignDeep({}, cleanup(entity.options));
-        settings.changeEntityOptions(ID, message.options);
+        const restartRequired = settings.changeEntityOptions(ID, options);
+        if (restartRequired) this.restartRequired = true;
         const newOptions = cleanup(entity.options);
         await this.publishInfo();
 
         logger.info(`Changed config for ${entityType} ${ID}`);
 
         this.eventBus.emitEntityOptionsChanged({from: oldOptions, to: newOptions, entity});
-        return utils.getResponse(message, {from: oldOptions, to: newOptions, id: ID}, null);
+        return utils.getResponse(
+            message,
+            {from: oldOptions, to: newOptions, id: ID, restart_required: this.restartRequired},
+            null,
+        );
     }
 
     @bind async deviceConfigureReporting(message: string | KeyValue): Promise<MQTTResponse> {
@@ -665,6 +656,7 @@ export default class Bridge extends Extension {
                 network_address: device.zh.networkAddress,
                 supported: !!device.definition,
                 friendly_name: device.name,
+                disabled: !!device.options.disabled,
                 description: device.options.description,
                 definition: this.getDefinitionPayload(device),
                 power_source: device.zh.powerSource,
