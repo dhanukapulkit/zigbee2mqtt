@@ -74,8 +74,13 @@ export default class Frontend extends Extension {
         this.wss = new WebSocket.Server({noServer: true});
         this.wss.on('connection', this.onWebSocketConnection);
 
-        this.server.listen(this.port, this.host);
-        logger.info(`Started frontend on port ${this.host}:${this.port}`);
+        if (this.host.startsWith('/')) {
+            this.server.listen(this.host);
+            logger.info(`Started frontend on socket ${this.host}`);
+        } else {
+            this.server.listen(this.port, this.host);
+            logger.info(`Started frontend on port ${this.host}:${this.port}`);
+        }
     }
 
     override async stop(): Promise<void> {
@@ -103,8 +108,8 @@ export default class Frontend extends Extension {
 
     @bind private onUpgrade(request: http.IncomingMessage, socket: net.Socket, head: Buffer): void {
         this.wss.handleUpgrade(request, socket, head, (ws) => {
-            this.authenticate(request, (isAuthentificated) => {
-                if (isAuthentificated) {
+            this.authenticate(request, (isAuthenticated) => {
+                if (isAuthenticated) {
                     this.wss.emit('connection', ws, request);
                 } else {
                     ws.close(4401, 'Unauthorized');
